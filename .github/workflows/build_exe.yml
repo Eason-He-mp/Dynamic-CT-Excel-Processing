@@ -17,6 +17,7 @@ jobs:
       uses: actions/setup-python@v6
       with:
         python-version: '3.11' # 推荐使用 3.11，兼容性和打包体积较好
+        architecture: 'x86'    # 【关键修改】：强制使用 32 位 Python
         cache: 'pip'
 
     - name: Install dependencies
