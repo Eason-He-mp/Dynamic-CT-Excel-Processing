@@ -1,24 +1,28 @@
-name: Build Windows EXE
+name: Build 32-bit Windows EXE
 
-# 触发条件：当你推送到 main 分支，或者在 GitHub 网页上手动触发时运行
 on:
+  push:
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
   build:
-    # 指定使用 GitHub 提供的最新 Windows 虚拟机
-    runs-on: windows-2025-vs2026
+    runs-on: windows-latest
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v6
+      uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v6
+    - name: Set up 32-bit Python
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.11' # 推荐使用 3.11，兼容性和打包体积较好
+        python-version: '3.11' 
         architecture: 'x86'    # 【关键修改】：强制使用 32 位 Python
         cache: 'pip'
+
+    - name: Verify Python Architecture
+      # 这一步用于在日志中确认我们确实在使用 32 位 Python (输出应为 32)
+      run: python -c "import struct; print('Python Architecture:', struct.calcsize('P') * 8, 'bit')"
 
     - name: Install dependencies
       run: |
@@ -26,15 +30,12 @@ jobs:
         pip install -r requirements.txt
 
     - name: Build with PyInstaller
-      # --noconsole: 运行时不显示黑色命令行窗口
-      # --onefile: 打包成单文件
-      # --clean: 清理打包过程中的临时文件
       run: |
         pyinstaller --noconsole --onefile --clean CT_Data_Processor.py
 
     - name: Upload EXE artifact
       uses: actions/upload-artifact@v4
       with:
-        name: CT_Data_Processor_Windows_EXE
+        name: CT_Data_Processor_Win32_EXE
         path: dist/CT_Data_Processor.exe
-        retention-days: 7 # 生成的 exe 文件在 GitHub 上保留 7 天供下载
+        retention-days: 7
