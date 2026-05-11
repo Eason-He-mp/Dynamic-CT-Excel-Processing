@@ -16,12 +16,11 @@ jobs:
     - name: Set up 32-bit Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11' 
-        architecture: 'x86'    # 【关键修改】：强制使用 32 位 Python
+        python-version: '3.9'  # 【关键修改】：改为 3.9
+        architecture: 'x86'    # 保持 32 位不变
         cache: 'pip'
 
     - name: Verify Python Architecture
-      # 这一步用于在日志中确认我们确实在使用 32 位 Python (输出应为 32)
       run: python -c "import struct; print('Python Architecture:', struct.calcsize('P') * 8, 'bit')"
 
     - name: Install dependencies
