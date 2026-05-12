@@ -14,7 +14,7 @@ def extract_number(filename):
 class CTDataProcessorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("动态CT扫描数据整理工具 v4.1 (双模式完整版)")
+        self.root.title("动态CT扫描数据整理工具 v4.2 (通用变量版)")
         self.root.geometry("680x760")
         self.root.resizable(False, False)
         
@@ -30,8 +30,8 @@ class CTDataProcessorApp:
         self.time_offset = tk.DoubleVar(value=10.0)
         
         self.col_time = tk.StringVar(value="Time")
-        self.col_force = tk.StringVar(value="Force")
-        self.col_disp = tk.StringVar(value="Displacement")
+        self.col_var_a = tk.StringVar(value="Force")        # 抽象为变量A
+        self.col_var_b = tk.StringVar(value="Displacement") # 抽象为变量B
         
         self.create_widgets()
 
@@ -40,8 +40,8 @@ class CTDataProcessorApp:
         frame_mode = ttk.LabelFrame(self.root, text="扫描模式选择", padding=10)
         frame_mode.pack(fill="x", padx=10, pady=5)
         
-        ttk.Radiobutton(frame_mode, text="Type 1 (Dynamic)", variable=self.scan_type, value="Type1", command=self.on_mode_change).pack(side="left", padx=20)
-        ttk.Radiobutton(frame_mode, text="Type 2 (Timelapse)", variable=self.scan_type, value="Type2", command=self.on_mode_change).pack(side="left", padx=20)
+        ttk.Radiobutton(frame_mode, text="Type 1 (主文件夹共享边界模式)", variable=self.scan_type, value="Type1", command=self.on_mode_change).pack(side="left", padx=20)
+        ttk.Radiobutton(frame_mode, text="Type 2 (子文件夹独立Scan模式)", variable=self.scan_type, value="Type2", command=self.on_mode_change).pack(side="left", padx=20)
 
         # ==================== 1. 文件路径设置区 ====================
         frame_path = ttk.LabelFrame(self.root, text="文件路径设置", padding=10)
@@ -80,13 +80,14 @@ class CTDataProcessorApp:
         frame_cols.pack(fill="x", padx=10, pady=5)
 
         ttk.Label(frame_cols, text="时间列名:").grid(row=0, column=0, sticky="w")
-        ttk.Entry(frame_cols, textvariable=self.col_time, width=15).grid(row=0, column=1, padx=5)
+        ttk.Entry(frame_cols, textvariable=self.col_time, width=12).grid(row=0, column=1, padx=5)
         
-        ttk.Label(frame_cols, text="力列名:").grid(row=0, column=2, sticky="w", padx=(10,0))
-        ttk.Entry(frame_cols, textvariable=self.col_force, width=15).grid(row=0, column=3, padx=5)
+        # 修改为通用的 A列 和 B列
+        ttk.Label(frame_cols, text="A列名:").grid(row=0, column=2, sticky="w", padx=(10,0))
+        ttk.Entry(frame_cols, textvariable=self.col_var_a, width=12).grid(row=0, column=3, padx=5)
         
-        ttk.Label(frame_cols, text="位移列名:").grid(row=0, column=4, sticky="w", padx=(10,0))
-        ttk.Entry(frame_cols, textvariable=self.col_disp, width=15).grid(row=0, column=5, padx=5)
+        ttk.Label(frame_cols, text="B列名:").grid(row=0, column=4, sticky="w", padx=(10,0))
+        ttk.Entry(frame_cols, textvariable=self.col_var_b, width=12).grid(row=0, column=5, padx=5)
 
         # ==================== 4. 操作与日志区 ====================
         self.btn_start = ttk.Button(self.root, text="开 始 处 理", command=self.start_processing_thread)
@@ -106,7 +107,6 @@ class CTDataProcessorApp:
 
     # --- 交互事件 ---
     def on_mode_change(self):
-        """当工程师切换模式时，自动重新分析当前文件夹"""
         mode = self.scan_type.get()
         self.log(f"\n[*] 已切换至 {mode} 模式")
         current_folder = self.tif_folder.get()
@@ -120,7 +120,6 @@ class CTDataProcessorApp:
         
         try:
             if mode == "Type1":
-                # Type 1 的分析逻辑 (主文件夹, recon子文件夹)
                 raw_files = [f for f in os.listdir(folder) if f.lower().endswith(('.tif', '.tiff'))]
                 all_files = [f for f in raw_files if not f.lower().startswith(('di', 'io'))]
                 
@@ -145,8 +144,6 @@ class CTDataProcessorApp:
                 self.log(f"-> 自动解析成功！检测到扫描次数(n)={n}, 首次扫描数(x)={x}")
 
             elif mode == "Type2":
-                # Type 2 的分析逻辑 (寻找 nnnn_xx 子文件夹)
-                # 正则表达式 r'^\d{4}' 用于匹配以4个数字开头的文件夹
                 subfolders = [d for d in os.listdir(folder) if os.path.isdir(os.path.join(folder, d)) and re.match(r'^\d{4}', d)]
                 n = len(subfolders)
                 
@@ -156,7 +153,6 @@ class CTDataProcessorApp:
                     self.tifs_per_scan.set(0)
                     return
 
-                # 读取第一个子文件夹，计算单次扫描的有效 TIF 数
                 first_sub = os.path.join(folder, subfolders[0])
                 raw_files = [f for f in os.listdir(first_sub) if f.lower().endswith(('.tif', '.tiff'))]
                 valid_files = [f for f in raw_files if not f.lower().startswith(('di', 'io'))]
@@ -229,43 +225,37 @@ class CTDataProcessorApp:
             self.root.after(0, lambda: self.btn_start.config(state='normal'))
 
     # ==========================================
-    # Type 2 处理逻辑 (子文件夹独立模式)
+    # Type 2 处理逻辑
     # ==========================================
     def process_type2(self):
-        # 1. 读取Excel
         self.log("正在读取力学Excel数据...")
         df_mech = pd.read_excel(self.excel_path.get())
         
         time_col = self.col_time.get()
-        force_col = self.col_force.get()
-        disp_col = self.col_disp.get()
+        var_a_col = self.col_var_a.get()
+        var_b_col = self.col_var_b.get()
         
-        for col in [time_col, force_col, disp_col]:
+        for col in [time_col, var_a_col, var_b_col]:
             if col not in df_mech.columns:
                 raise ValueError(f"Excel中找不到表头: '{col}'，请检查设置。")
         
         df_mech[time_col] = pd.to_datetime(df_mech[time_col])
         
-        # 2. 寻找并排序子文件夹
         tif_dir = self.tif_folder.get()
         subfolders = [d for d in os.listdir(tif_dir) if os.path.isdir(os.path.join(tif_dir, d)) and re.match(r'^\d{4}', d)]
         
         if not subfolders:
             raise FileNotFoundError("未找到符合 'nnnn_xx' 命名规则的子文件夹！")
             
-        # 根据前4位数字进行排序
         subfolders.sort(key=lambda d: int(re.match(r'^(\d{4})', d).group(1)))
         
-        # 3. 遍历子文件夹提取时间
         scan_records = []
         offset_mins = self.time_offset.get()
         
         for d in subfolders:
-            # 提取前4位数字作为 Scan Rank
             rank = int(re.match(r'^(\d{4})', d).group(1))
             sub_path = os.path.join(tif_dir, d)
             
-            # 读取该子文件夹下的所有TIF，并排除 di 和 io
             raw_files = [f for f in os.listdir(sub_path) if f.lower().endswith(('.tif', '.tiff'))]
             valid_files = [f for f in raw_files if not f.lower().startswith(('di', 'io'))]
             
@@ -275,7 +265,6 @@ class CTDataProcessorApp:
                 
             valid_files.sort(key=extract_number)
             
-            # 提取独立的第一帧和最后一帧
             first_file = valid_files[0]
             last_file = valid_files[-1]
             
@@ -290,7 +279,7 @@ class CTDataProcessorApp:
                 
             scan_records.append({
                 'Scan Rank': rank,
-                'Folder Name': d,  # 记录子文件夹名字方便核对
+                'Folder Name': d,
                 'CT Start Time': time1_ct,
                 'CT End Time': time2_ct,
                 'Target Start Time': target_time1,
@@ -299,8 +288,7 @@ class CTDataProcessorApp:
             
             self.log(f"Scan {rank} ({d}) 提取完成 | 包含 {len(valid_files)} 张有效图")
 
-        # 4. 匹配数据
-        self.log("\n正在计算时间段内的力和位移平均值...")
+        self.log("\n正在计算时间段内的平均值...")
         final_results = []
         
         for record in scan_records:
@@ -311,8 +299,8 @@ class CTDataProcessorApp:
             df_filtered = df_mech.loc[mask]
             
             if not df_filtered.empty:
-                avg_force = df_filtered[force_col].mean()
-                avg_disp = df_filtered[disp_col].mean()
+                avg_a = df_filtered[var_a_col].mean()
+                avg_b = df_filtered[var_b_col].mean()
                 matched_points = len(df_filtered)
             else:
                 mid_time = t1 + (t2 - t1) / 2
@@ -320,24 +308,24 @@ class CTDataProcessorApp:
                 closest_idx = time_diff.idxmin()
                 closest_row = df_mech.loc[closest_idx]
                 
-                avg_force = closest_row[force_col]
-                avg_disp = closest_row[disp_col]
+                avg_a = closest_row[var_a_col]
+                avg_b = closest_row[var_b_col]
                 matched_points = 1
                 self.log(f"警告: Scan {record['Scan Rank']} 时间段内无数据点，已使用最近单点代替。")
 
+            # 动态生成表头名称
             final_results.append({
                 'Scan Rank': record['Scan Rank'],
-                'Folder Name': record['Folder Name'], # Type 2 专属：输出对应的文件夹名
+                'Folder Name': record['Folder Name'],
                 'CT Start Time (PC2)': record['CT Start Time'],
                 'CT End Time (PC2)': record['CT End Time'],
                 'Mech Target Start (PC1)': t1,
                 'Mech Target End (PC1)': t2,
                 'Data Points Averaged': matched_points,
-                'Average Force': avg_force,
-                'Average Displacement': avg_disp
+                f'Average {var_a_col}': avg_a,  # 动态匹配 A 列名
+                f'Average {var_b_col}': avg_b   # 动态匹配 B 列名
             })
 
-        # 5. 导出结果
         self.log("正在生成结果Excel...")
         df_result = pd.DataFrame(final_results)
         df_result.to_excel(self.output_path.get(), index=False)
@@ -346,17 +334,17 @@ class CTDataProcessorApp:
         messagebox.showinfo("成功", "数据处理完成！")
 
     # ==========================================
-    # Type 1 处理逻辑 (主文件夹共享边界模式)
+    # Type 1 处理逻辑
     # ==========================================
     def process_type1(self):
         self.log("正在读取力学Excel数据...")
         df_mech = pd.read_excel(self.excel_path.get())
         
         time_col = self.col_time.get()
-        force_col = self.col_force.get()
-        disp_col = self.col_disp.get()
+        var_a_col = self.col_var_a.get()
+        var_b_col = self.col_var_b.get()
         
-        for col in [time_col, force_col, disp_col]:
+        for col in [time_col, var_a_col, var_b_col]:
             if col not in df_mech.columns:
                 raise ValueError(f"Excel中找不到表头: '{col}'，请检查设置。")
         
@@ -409,7 +397,7 @@ class CTDataProcessorApp:
             current_start_idx = actual_end_idx - 1
             if current_start_idx >= len(all_files) - 1: break
 
-        self.log("\n正在计算时间段内的力和位移平均值...")
+        self.log("\n正在计算时间段内的平均值...")
         final_results = []
         
         for record in scan_records:
@@ -420,8 +408,8 @@ class CTDataProcessorApp:
             df_filtered = df_mech.loc[mask]
             
             if not df_filtered.empty:
-                avg_force = df_filtered[force_col].mean()
-                avg_disp = df_filtered[disp_col].mean()
+                avg_a = df_filtered[var_a_col].mean()
+                avg_b = df_filtered[var_b_col].mean()
                 matched_points = len(df_filtered)
             else:
                 mid_time = t1 + (t2 - t1) / 2
@@ -429,11 +417,12 @@ class CTDataProcessorApp:
                 closest_idx = time_diff.idxmin()
                 closest_row = df_mech.loc[closest_idx]
                 
-                avg_force = closest_row[force_col]
-                avg_disp = closest_row[disp_col]
+                avg_a = closest_row[var_a_col]
+                avg_b = closest_row[var_b_col]
                 matched_points = 1
                 self.log(f"警告: Scan {record['Scan Rank']} 时间段内无数据点，已使用最近单点代替。")
 
+            # 动态生成表头名称
             final_results.append({
                 'Scan Rank': record['Scan Rank'],
                 'CT Start Time (PC2)': record['CT Start Time'],
@@ -441,8 +430,8 @@ class CTDataProcessorApp:
                 'Mech Target Start (PC1)': t1,
                 'Mech Target End (PC1)': t2,
                 'Data Points Averaged': matched_points,
-                'Average Force': avg_force,
-                'Average Displacement': avg_disp
+                f'Average {var_a_col}': avg_a,  # 动态匹配 A 列名
+                f'Average {var_b_col}': avg_b   # 动态匹配 B 列名
             })
 
         self.log("正在生成结果Excel...")
