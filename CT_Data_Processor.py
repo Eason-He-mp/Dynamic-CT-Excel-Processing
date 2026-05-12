@@ -14,11 +14,13 @@ def extract_number(filename):
 class CTDataProcessorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("动态CT扫描数据整理工具 v3.1 (自动排除校准图)")
-        self.root.geometry("680x700")
+        self.root.title("动态CT扫描数据整理工具 v4.0 (双模式版)")
+        self.root.geometry("680x760")  # 稍微加高了一点点以容纳新按钮
         self.root.resizable(False, False)
         
         # 变量定义
+        self.scan_type = tk.StringVar(value="Type1") # 新增：用于存储当前选择的模式
+        
         self.tif_folder = tk.StringVar()
         self.excel_path = tk.StringVar()
         self.output_path = tk.StringVar()
@@ -34,6 +36,14 @@ class CTDataProcessorApp:
         self.create_widgets()
 
     def create_widgets(self):
+        # ==================== 0. 模式选择区 (新增) ====================
+        frame_mode = ttk.LabelFrame(self.root, text="扫描模式选择", padding=10)
+        frame_mode.pack(fill="x", padx=10, pady=5)
+        
+        # 使用单选按钮进行切换
+        ttk.Radiobutton(frame_mode, text="Type 1 (当前标准动态CT模式)", variable=self.scan_type, value="Type1", command=self.on_mode_change).pack(side="left", padx=20)
+        ttk.Radiobutton(frame_mode, text="Type 2 (新模式 - 待开发)", variable=self.scan_type, value="Type2", command=self.on_mode_change).pack(side="left", padx=20)
+
         # ==================== 1. 文件路径设置区 ====================
         frame_path = ttk.LabelFrame(self.root, text="文件路径设置", padding=10)
         frame_path.pack(fill="x", padx=10, pady=5)
@@ -95,11 +105,22 @@ class CTDataProcessorApp:
         self.txt_log.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
+    # --- 交互事件 ---
+    def on_mode_change(self):
+        """当工程师切换模式时触发"""
+        mode = self.scan_type.get()
+        self.log(f"[*] 已切换至 {mode} 模式")
+        # 如果需要，这里可以根据模式禁用或启用某些输入框
+        # 比如：if mode == "Type2": self.entry_scans.config(state='normal')
+
     # --- 核心：自动分析 TIF 文件夹 ---
     def analyze_tif_folder(self, folder):
+        if self.scan_type.get() == "Type2":
+            self.log("提示：当前为 Type 2 模式，自动解析逻辑待开发。")
+            return
+
         self.log(f"正在分析文件夹: {folder}")
         try:
-            # 1. 获取所有 TIF 文件，并排除 di 和 io 开头的校准文件
             raw_files = [f for f in os.listdir(folder) if f.lower().endswith(('.tif', '.tiff'))]
             all_files = [f for f in raw_files if not f.lower().startswith(('di', 'io'))]
             
@@ -112,7 +133,6 @@ class CTDataProcessorApp:
                 self.log("警告: 未在主文件夹中找到有效的实际 CT 图像！")
                 return
 
-            # 2. 寻找 recon 文件夹计算 n
             recon_path = os.path.join(folder, 'recon')
             if not os.path.exists(recon_path):
                 self.log("警告: 未找到 'recon' 子文件夹，无法自动计算扫描参数。")
@@ -125,11 +145,9 @@ class CTDataProcessorApp:
                 self.log("警告: 'recon' 文件夹为空，无法获取扫描次数。")
                 return
 
-            # 3. 计算首次扫描图片数 x
             x = (m - 1) // n + 1
             expected_m = x + (n - 1) * (x - 1)
             
-            # 更新 GUI 变量
             self.num_scans.set(n)
             self.tifs_per_scan.set(x)
             
@@ -171,7 +189,8 @@ class CTDataProcessorApp:
             messagebox.showwarning("提示", "请先选择所有必要的文件和文件夹路径！")
             return
             
-        if self.num_scans.get() <= 0 or self.tifs_per_scan.get() <= 0:
+        # 仅在 Type1 模式下检查参数是否大于0
+        if self.scan_type.get() == "Type1" and (self.num_scans.get() <= 0 or self.tifs_per_scan.get() <= 0):
             messagebox.showwarning("提示", "扫描参数无效，请检查TIF文件夹结构是否正确！")
             return
             
@@ -180,130 +199,149 @@ class CTDataProcessorApp:
         self.txt_log.delete(1.0, tk.END)
         self.txt_log.config(state='disabled')
         
-        thread = threading.Thread(target=self.process_data)
+        # 启动多线程
+        thread = threading.Thread(target=self.process_data_router)
         thread.daemon = True
         thread.start()
 
-    def process_data(self):
+    # --- 路由函数：根据模式分发任务 ---
+    def process_data_router(self):
         try:
-            self.log(">>> 开始处理任务...")
+            mode = self.scan_type.get()
+            self.log(f">>> 开始执行 {mode} 模式处理任务...")
             
-            # 1. 读取Excel
-            self.log("正在读取力学Excel数据...")
-            df_mech = pd.read_excel(self.excel_path.get())
-            
-            time_col = self.col_time.get()
-            force_col = self.col_force.get()
-            disp_col = self.col_disp.get()
-            
-            for col in [time_col, force_col, disp_col]:
-                if col not in df_mech.columns:
-                    raise ValueError(f"Excel中找不到表头: '{col}'，请检查设置。")
-            
-            df_mech[time_col] = pd.to_datetime(df_mech[time_col])
-            
-            # 2. 读取并排序TIF (排除 di 和 io 校准图)
-            self.log("正在读取并排序有效TIF文件...")
-            tif_dir = self.tif_folder.get()
-            raw_files = [f for f in os.listdir(tif_dir) if f.lower().endswith(('.tif', '.tiff'))]
-            all_files = [f for f in raw_files if not f.lower().startswith(('di', 'io'))]
-            
-            all_files.sort(key=extract_number)
-            
-            # 3. 分组并提取时间
-            scan_records = []
-            num_scans = self.num_scans.get()
-            tifs_per_scan = self.tifs_per_scan.get()
-            offset_mins = self.time_offset.get()
-            
-            current_start_idx = 0
-            
-            for rank in range(1, num_scans + 1):
-                count = tifs_per_scan if rank == 1 else tifs_per_scan - 1
-                end_idx = current_start_idx + count
+            if mode == "Type1":
+                self.process_type1()
+            elif mode == "Type2":
+                self.process_type2()
                 
-                actual_end_idx = min(end_idx, len(all_files))
-                current_scan_files = all_files[current_start_idx:actual_end_idx]
-                
-                if not current_scan_files:
-                    break
-                    
-                first_file = current_scan_files[0]
-                last_file = current_scan_files[-1]
-                
-                time1_ct = datetime.fromtimestamp(os.path.getmtime(os.path.join(tif_dir, first_file)))
-                time2_ct = datetime.fromtimestamp(os.path.getmtime(os.path.join(tif_dir, last_file)))
-                
-                target_time1 = time1_ct - timedelta(minutes=offset_mins)
-                target_time2 = time2_ct - timedelta(minutes=offset_mins)
-                
-                if target_time1 > target_time2:
-                    target_time1, target_time2 = target_time2, target_time1
-                    
-                scan_records.append({
-                    'Scan Rank': rank,
-                    'CT Start Time': time1_ct,
-                    'CT End Time': time2_ct,
-                    'Target Start Time': target_time1,
-                    'Target End Time': target_time2
-                })
-                
-                self.log(f"Scan {rank} 提取完成 | 包含 {len(current_scan_files)} 张图")
-                
-                current_start_idx = actual_end_idx - 1
-                if current_start_idx >= len(all_files) - 1:
-                    break
-
-            # 4. 匹配数据
-            self.log("正在计算时间段内的力和位移平均值...")
-            final_results = []
-            
-            for record in scan_records:
-                t1 = record['Target Start Time']
-                t2 = record['Target End Time']
-                
-                mask = (df_mech[time_col] >= t1) & (df_mech[time_col] <= t2)
-                df_filtered = df_mech.loc[mask]
-                
-                if not df_filtered.empty:
-                    avg_force = df_filtered[force_col].mean()
-                    avg_disp = df_filtered[disp_col].mean()
-                    matched_points = len(df_filtered)
-                else:
-                    mid_time = t1 + (t2 - t1) / 2
-                    time_diff = (df_mech[time_col] - mid_time).abs()
-                    closest_idx = time_diff.idxmin()
-                    closest_row = df_mech.loc[closest_idx]
-                    
-                    avg_force = closest_row[force_col]
-                    avg_disp = closest_row[disp_col]
-                    matched_points = 1
-                    self.log(f"警告: Scan {record['Scan Rank']} 时间段内无数据点，已使用最近单点代替。")
-
-                final_results.append({
-                    'Scan Rank': record['Scan Rank'],
-                    'CT Start Time (PC2)': record['CT Start Time'],
-                    'CT End Time (PC2)': record['CT End Time'],
-                    'Mech Target Start (PC1)': t1,
-                    'Mech Target End (PC1)': t2,
-                    'Data Points Averaged': matched_points,
-                    'Average Force': avg_force,
-                    'Average Displacement': avg_disp
-                })
-
-            # 5. 导出结果
-            self.log("正在生成结果Excel...")
-            df_result = pd.DataFrame(final_results)
-            df_result.to_excel(self.output_path.get(), index=False)
-            
-            self.log(f">>> 处理完成！结果已保存至:\n{self.output_path.get()}")
-            messagebox.showinfo("成功", "数据处理完成！")
-
         except Exception as e:
             self.log(f"[错误] 发生异常: {str(e)}")
             messagebox.showerror("错误", f"处理过程中发生错误:\n{str(e)}")
         finally:
             self.root.after(0, lambda: self.btn_start.config(state='normal'))
+
+    # --- 预留的 Type 2 处理逻辑 ---
+    def process_type2(self):
+        self.log("正在读取数据...")
+        self.log("====================================")
+        self.log("Type 2 模式的规则暂未定义。")
+        self.log("请告知开发者 Type 2 的 TIF 结构和时间匹配规则。")
+        self.log("====================================")
+        self.log(">>> 处理结束。")
+
+    # --- 原有的 Type 1 处理逻辑 ---
+    def process_type1(self):
+        # 1. 读取Excel
+        self.log("正在读取力学Excel数据...")
+        df_mech = pd.read_excel(self.excel_path.get())
+        
+        time_col = self.col_time.get()
+        force_col = self.col_force.get()
+        disp_col = self.col_disp.get()
+        
+        for col in [time_col, force_col, disp_col]:
+            if col not in df_mech.columns:
+                raise ValueError(f"Excel中找不到表头: '{col}'，请检查设置。")
+        
+        df_mech[time_col] = pd.to_datetime(df_mech[time_col])
+        
+        # 2. 读取并排序TIF (排除 di 和 io 校准图)
+        self.log("正在读取并排序有效TIF文件...")
+        tif_dir = self.tif_folder.get()
+        raw_files = [f for f in os.listdir(tif_dir) if f.lower().endswith(('.tif', '.tiff'))]
+        all_files = [f for f in raw_files if not f.lower().startswith(('di', 'io'))]
+        
+        all_files.sort(key=extract_number)
+        
+        # 3. 分组并提取时间
+        scan_records = []
+        num_scans = self.num_scans.get()
+        tifs_per_scan = self.tifs_per_scan.get()
+        offset_mins = self.time_offset.get()
+        
+        current_start_idx = 0
+        
+        for rank in range(1, num_scans + 1):
+            count = tifs_per_scan if rank == 1 else tifs_per_scan - 1
+            end_idx = current_start_idx + count
+            
+            actual_end_idx = min(end_idx, len(all_files))
+            current_scan_files = all_files[current_start_idx:actual_end_idx]
+            
+            if not current_scan_files:
+                break
+                
+            first_file = current_scan_files[0]
+            last_file = current_scan_files[-1]
+            
+            time1_ct = datetime.fromtimestamp(os.path.getmtime(os.path.join(tif_dir, first_file)))
+            time2_ct = datetime.fromtimestamp(os.path.getmtime(os.path.join(tif_dir, last_file)))
+            
+            target_time1 = time1_ct - timedelta(minutes=offset_mins)
+            target_time2 = time2_ct - timedelta(minutes=offset_mins)
+            
+            if target_time1 > target_time2:
+                target_time1, target_time2 = target_time2, target_time1
+                
+            scan_records.append({
+                'Scan Rank': rank,
+                'CT Start Time': time1_ct,
+                'CT End Time': time2_ct,
+                'Target Start Time': target_time1,
+                'Target End Time': target_time2
+            })
+            
+            self.log(f"Scan {rank} 提取完成 | 包含 {len(current_scan_files)} 张图")
+            
+            current_start_idx = actual_end_idx - 1
+            if current_start_idx >= len(all_files) - 1:
+                break
+
+        # 4. 匹配数据
+        self.log("正在计算时间段内的力和位移平均值...")
+        final_results = []
+        
+        for record in scan_records:
+            t1 = record['Target Start Time']
+            t2 = record['Target End Time']
+            
+            mask = (df_mech[time_col] >= t1) & (df_mech[time_col] <= t2)
+            df_filtered = df_mech.loc[mask]
+            
+            if not df_filtered.empty:
+                avg_force = df_filtered[force_col].mean()
+                avg_disp = df_filtered[disp_col].mean()
+                matched_points = len(df_filtered)
+            else:
+                mid_time = t1 + (t2 - t1) / 2
+                time_diff = (df_mech[time_col] - mid_time).abs()
+                closest_idx = time_diff.idxmin()
+                closest_row = df_mech.loc[closest_idx]
+                
+                avg_force = closest_row[force_col]
+                avg_disp = closest_row[disp_col]
+                matched_points = 1
+                self.log(f"警告: Scan {record['Scan Rank']} 时间段内无数据点，已使用最近单点代替。")
+
+            final_results.append({
+                'Scan Rank': record['Scan Rank'],
+                'CT Start Time (PC2)': record['CT Start Time'],
+                'CT End Time (PC2)': record['CT End Time'],
+                'Mech Target Start (PC1)': t1,
+                'Mech Target End (PC1)': t2,
+                'Data Points Averaged': matched_points,
+                'Average Force': avg_force,
+                'Average Displacement': avg_disp
+            })
+
+        # 5. 导出结果
+        self.log("正在生成结果Excel...")
+        df_result = pd.DataFrame(final_results)
+        df_result.to_excel(self.output_path.get(), index=False)
+        
+        self.log(f">>> 处理完成！结果已保存至:\n{self.output_path.get()}")
+        messagebox.showinfo("成功", "数据处理完成！")
 
 if __name__ == "__main__":
     root = tk.Tk()
