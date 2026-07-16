@@ -144,7 +144,7 @@ class CTDataProcessorApp:
                 self.log(f"-> 自动解析成功！检测到扫描次数(n)={n}, 首次扫描数(x)={x}")
 
             elif mode == "Type2":
-                subfolders = [d for d in os.listdir(folder) if os.path.isdir(os.path.join(folder, d)) and re.match(r'^\d{4}', d)]
+                subfolders = [d for d in os.listdir(folder) if os.path.isdir(os.path.join(folder, d)) and re.search(r'\d+', d)]
                 n = len(subfolders)
                 
                 if n == 0:
@@ -242,18 +242,18 @@ class CTDataProcessorApp:
         df_mech[time_col] = pd.to_datetime(df_mech[time_col])
         
         tif_dir = self.tif_folder.get()
-        subfolders = [d for d in os.listdir(tif_dir) if os.path.isdir(os.path.join(tif_dir, d)) and re.match(r'^\d{4}', d)]
+        subfolders = [d for d in os.listdir(tif_dir) if os.path.isdir(os.path.join(tif_dir, d)) and re.search(r'\d+', d)]
         
         if not subfolders:
             raise FileNotFoundError("未找到符合 'nnnn_xx' 命名规则的子文件夹！")
             
-        subfolders.sort(key=lambda d: int(re.match(r'^(\d{4})', d).group(1)))
+        subfolders.sort(key=extract_number)
         
         scan_records = []
         offset_mins = self.time_offset.get()
         
         for d in subfolders:
-            rank = int(re.match(r'^(\d{4})', d).group(1))
+            rank = extract_number(d)
             sub_path = os.path.join(tif_dir, d)
             
             raw_files = [f for f in os.listdir(sub_path) if f.lower().endswith(('.tif', '.tiff'))]
