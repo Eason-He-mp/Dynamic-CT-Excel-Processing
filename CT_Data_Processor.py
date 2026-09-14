@@ -14,31 +14,23 @@ def extract_number(filename):
 # 智能读取器：专治各种“伪装的”工业机 Excel
 # ==========================================
 def smart_read_excel(file_path, nrows=None):
-    """
-    尝试多种方式读取文件，解决工业机导出的伪 .xls 乱码问题
-    """
-    # 1. 尝试按真正的 Excel 格式读取
     try:
         return pd.read_excel(file_path, nrows=nrows)
-    except Exception as e_excel:
-        # 如果报错，说明它根本不是真正的 Excel 文件，而是伪装的文本文件
+    except Exception:
         pass
 
-    # 2. 尝试按 CSV/TSV 纯文本读取 (尝试不同的分隔符和编码)
     encodings = ['utf-8', 'gbk', 'gb18030', 'utf-16']
     separators = ['\t', ',']
     
     for enc in encodings:
         for sep in separators:
             try:
-                # on_bad_lines='skip' 防止某些行多出几个逗号导致报错
                 df = pd.read_csv(file_path, sep=sep, encoding=enc, nrows=nrows, on_bad_lines='skip')
-                if len(df.columns) > 1: # 确保成功分列了
+                if len(df.columns) > 1:
                     return df
             except Exception:
                 continue
                 
-    # 3. 尝试按 HTML 表格读取 (有些老机器会导出 HTML 代码伪装成 xls)
     try:
         tables = pd.read_html(file_path, encoding='utf-8')
         if tables:
@@ -49,7 +41,6 @@ def smart_read_excel(file_path, nrows=None):
     except Exception:
         pass
 
-    # 如果所有方法都失败了，抛出明确的错误
     raise ValueError("无法解析该 Excel 文件，可能是未知的编码或损坏的文件格式。")
 
 
@@ -74,8 +65,9 @@ LANG = {
         'lbl_offset_tip': "(注：CT机时间 减去 力学机时间)",
         'frame_cols': "3. 变量设置 (从Excel自动读取)",
         'lbl_time_col': "时间列 (基准):",
-        'lbl_vars': "需要求平均值的目标变量:",
+        'lbl_vars': "目标变量:",
         'btn_add_var': "➕ 添加变量",
+        'btn_del_var': "➖ 删除变量",
         'btn_start': "开 始 处 理",
         'lbl_log': "处理日志:",
         'msg_warn_path': "请先选择所有必要的文件和文件夹路径！",
@@ -91,7 +83,7 @@ LANG = {
         'sheet_result': "处理结果"
     },
     'en': {
-        'title': "Dynamic CT Data Processor",
+        'title': "Dynamic CT Data Processor v5.2",
         'btn_lang': "🌐 中文",
         'frame_path': "1. File Paths",
         'lbl_tif': "TIF Main Folder:",
@@ -107,8 +99,9 @@ LANG = {
         'lbl_offset_tip': "(CT Time minus Mechanics Time)",
         'frame_cols': "3. Variables (Auto-loaded from Excel)",
         'lbl_time_col': "Time Column (Ref):",
-        'lbl_vars': "Target Variables for Averaging:",
+        'lbl_vars': "Target Variables:",
         'btn_add_var': "➕ Add Variable",
+        'btn_del_var': "➖ Remove Variable",
         'btn_start': "S T A R T",
         'lbl_log': "Processing Log:",
         'msg_warn_path': "Please select all required paths!",
@@ -151,11 +144,16 @@ class CTDataProcessorApp:
         self.update_ui_text()
 
     def create_widgets(self):
-        self.btn_lang = ttk.Button(self.root, command=self.toggle_lang)
-        self.btn_lang.place(relx=0.98, rely=0.01, anchor="ne")
+        # ==================== 0. 顶部工具栏 (语言切换) ====================
+        top_bar = ttk.Frame(self.root)
+        top_bar.pack(fill="x", padx=10, pady=(10, 0))
+        
+        self.btn_lang = ttk.Button(top_bar, command=self.toggle_lang)
+        self.btn_lang.pack(side="right")
 
+        # ==================== 1. 文件路径设置区 ====================
         self.frame_path = ttk.LabelFrame(self.root, padding=10)
-        self.frame_path.pack(fill="x", padx=10, pady=(25, 5))
+        self.frame_path.pack(fill="x", padx=10, pady=5)
 
         self.lbl_tif = ttk.Label(self.frame_path)
         self.lbl_tif.grid(row=0, column=0, sticky="w", pady=5)
@@ -175,6 +173,7 @@ class CTDataProcessorApp:
         self.btn_browse_out = ttk.Button(self.frame_path, command=self.browse_output)
         self.btn_browse_out.grid(row=2, column=2)
 
+        # ==================== 2. 参数设置区 ====================
         self.frame_params = ttk.LabelFrame(self.root, padding=10)
         self.frame_params.pack(fill="x", padx=10, pady=5)
 
@@ -197,6 +196,7 @@ class CTDataProcessorApp:
         self.lbl_offset_tip = ttk.Label(self.frame_params, foreground="gray")
         self.lbl_offset_tip.grid(row=2, column=2, columnspan=2, sticky="w", padx=5)
 
+        # ==================== 3. 动态表头设置区 ====================
         self.frame_cols = ttk.LabelFrame(self.root, padding=10)
         self.frame_cols.pack(fill="x", padx=10, pady=5)
 
@@ -211,12 +211,21 @@ class CTDataProcessorApp:
         self.vars_container = ttk.Frame(self.frame_cols)
         self.vars_container.grid(row=1, column=1, sticky="w")
         
-        self.btn_add_var = ttk.Button(self.frame_cols, command=self.add_variable_dropdown)
-        self.btn_add_var.grid(row=1, column=2, sticky="nw", padx=10)
+        # 将添加和删除按钮放在一个小 Frame 里，垂直排列
+        self.btn_action_frame = ttk.Frame(self.frame_cols)
+        self.btn_action_frame.grid(row=1, column=2, sticky="nw", padx=10)
 
-        self.add_variable_dropdown()
-        self.add_variable_dropdown()
+        self.btn_add_var = ttk.Button(self.btn_action_frame, command=self.add_variable_dropdown)
+        self.btn_add_var.pack(fill="x", pady=(0, 5))
+        
+        self.btn_del_var = ttk.Button(self.btn_action_frame, command=self.remove_variable_dropdown)
+        self.btn_del_var.pack(fill="x")
 
+        # 默认添加三个下拉框 (时间、力、位移的默认占位)
+        for _ in range(3):
+            self.add_variable_dropdown()
+
+        # ==================== 4. 操作与日志区 ====================
         self.btn_start = ttk.Button(self.root, command=self.start_processing_thread)
         self.btn_start.pack(pady=15, ipadx=20, ipady=5)
 
@@ -263,6 +272,7 @@ class CTDataProcessorApp:
         self.lbl_time_col.config(text=t['lbl_time_col'])
         self.lbl_vars.config(text=t['lbl_vars'])
         self.btn_add_var.config(text=t['btn_add_var'])
+        self.btn_del_var.config(text=t['btn_del_var'])
         
         self.btn_start.config(text=t['btn_start'])
         self.lbl_log.config(text=t['lbl_log'])
@@ -279,10 +289,16 @@ class CTDataProcessorApp:
         if self.excel_headers:
             cb['values'] = self.excel_headers
 
+    def remove_variable_dropdown(self):
+        # 至少保留 1 个变量输入框
+        if len(self.var_comboboxes) > 1:
+            self.target_vars.pop()
+            cb = self.var_comboboxes.pop()
+            cb.destroy()
+
     def load_excel_headers(self, file_path):
         self.log(LANG[self.lang]['log_read_excel'])
         try:
-            # 【核心修改】：使用智能读取器加载表头
             df = smart_read_excel(file_path, nrows=0)
             self.excel_headers = list(df.columns)
             
@@ -392,7 +408,6 @@ class CTDataProcessorApp:
             mode = self.detected_mode.get()
             self.log(f">>> Start processing ({mode})...")
             
-            # 【核心修改】：使用智能读取器加载完整数据
             self.log("Loading raw Excel data (Smart Mode)...")
             df_mech = smart_read_excel(self.excel_path.get())
             
